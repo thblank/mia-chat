@@ -2,13 +2,13 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>MiaChat - 带记忆的 AI</title>
+    <title>MiaChat</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; display: flex; justify-content: center; height: 100vh; }
         .chat-container { width: 100%; max-width: 600px; background: white; display: flex; flex-direction: column; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
         .header { background: #007bff; color: white; padding: 15px; text-align: center; font-size: 18px; font-weight: bold; }
         .chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
-        .message { max-width: 80%; padding: 10px 15px; border-radius: 10px; line-height: 1.5; }
+        .message { max-width: 80%; padding: 10px 15px; border-radius: 10px; line-height: 1.5; white-space: pre-wrap; }
         .user-message { align-self: flex-end; background: #007bff; color: white; border-bottom-right-radius: 0; }
         .ai-message { align-self: flex-start; background: #e4e6eb; color: black; border-bottom-left-radius: 0; }
         .memory-tag { font-size: 12px; color: #888; margin-top: 5px; font-style: italic; }
@@ -20,9 +20,12 @@
 </head>
 <body>
     <div class="chat-container">
-        <div class="header">MiaChat (DeepSeek + Mem0)</div>
+        <div class="header">
+            MiaChat (DeepSeek + Mem0)
+            <span class="user-label" id="userLabel">正在识别用户...</span>
+        </div>
         <div class="chat-box" id="chatBox">
-            <div class="message ai-message">你好！我是带有记忆功能的 AI，告诉我一些关于你的事情吧。</div>
+            <div class="message ai-message">你好！今天又是美好的一天</div>
         </div>
         <div class="input-area">
             <input type="text" id="msgInput" placeholder="输入消息..." onkeypress="if(event.key==='Enter') sendMessage()">
@@ -33,53 +36,86 @@
     <script>
         const chatBox = document.getElementById('chatBox');
         const msgInput = document.getElementById('msgInput');
-        const userId = "xiaoming"; // 固定测试用户
+        const userLabel = document.getElementById('userLabel');
+
+        // 从 URL 读取动态参数：/chat?uid=user_1001&token=xxx
+        const params = new URLSearchParams(window.location.search);
+        const userId = (params.get('uid') || sessionStorage.getItem('uid') || '').trim();
+        const token = (params.get('token') || sessionStorage.getItem('token') || '').trim();
+
+        if (userId) sessionStorage.setItem('uid', userId);
+        if (token) sessionStorage.setItem('token', token);
+        // 把 uid/token 从地址栏和浏览器历史里抹掉，防止泄漏
+        if (params.has('uid') || params.has('token')) {
+            window.history.replaceState(null, '', window.location.pathname);
+        }
+
+        userLabel.textContent = userId ? '当前用户：' + userId : '未识别到用户';
+
+        let msgSeq = 0;
+
+        if (!userId || !token) {
+            appendMessage('未检测到有效的用户身份，请通过 ?uid=你的用户ID&token=接口令牌 访问本页面。', 'ai-message');
+        }
 
         async function sendMessage() {
             const text = msgInput.value.trim();
             if (!text) return;
 
-            // 显示用户消息
+            if (!userId || !token) {
+                appendMessage('请先通过 ?uid=用户ID&token=令牌 访问本页面后再发送消息。', 'ai-message');
+                return;
+            }
+
             appendMessage(text, 'user-message');
             msgInput.value = '';
 
-            // 显示加载中
-            const loadingId = appendMessage('思考中...', 'ai-message');
+            const loadingEl = appendMessage('思考中...', 'ai-message');
 
             try {
                 const response = await fetch('/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
                     body: JSON.stringify({ user_id: userId, message: text })
                 });
+
+                if (response.status === 401 || response.status === 403) {
+                    throw new Error('鉴权失败，请检查 token 是否正确或已过期');
+                }
+                if (!response.ok) {
+                    const detail = await response.text();
+                    throw new Error('HTTP ' + response.status + ' ' + detail);
+                }
+
                 const data = await response.json();
+                loadingEl.innerText = data.reply;
 
-                // 替换加载中为真实回复
-                const aiMsgDiv = document.getElementById(loadingId);
-                aiMsgDiv.innerText = data.reply;
-
-                // 如果有命中记忆，附加显示在气泡下方
                 if (data.used_memories && data.used_memories.length > 0) {
                     const memDiv = document.createElement('div');
                     memDiv.className = 'memory-tag';
                     memDiv.innerText = "💡 触发记忆：" + data.used_memories.join(" | ");
-                    aiMsgDiv.appendChild(memDiv);
+                    loadingEl.appendChild(memDiv);
                 }
 
             } catch (error) {
-                document.getElementById(loadingId).innerText = '网络错误，请检查服务是否开启。';
+                loadingEl.innerText = '请求失败：' + error.message;
+                console.error(error);
+            } finally {
+                chatBox.scrollTop = chatBox.scrollHeight;
             }
         }
 
         function appendMessage(text, className) {
             const div = document.createElement('div');
-            const id = 'msg-' + Date.now();
-            div.id = id;
+            div.id = 'msg-' + (++msgSeq);
             div.className = 'message ' + className;
             div.innerText = text;
             chatBox.appendChild(div);
             chatBox.scrollTop = chatBox.scrollHeight;
-            return id;
+            return div;
         }
     </script>
 </body>
